@@ -39,13 +39,7 @@ type PnfResult = {
   chartLow: number;
 };
 
-type NasdaqReference = {
-  last?: number;
-  rows: { date: string; event: string; eventLevel: number | null; last: number | null }[];
-};
-
 const MONTH_MAP = ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C'];
-const SAMPLE_BASE = 277.2932734023335;
 const SAMPLE_LEFT = '!AVCBLUE1';
 const SAMPLE_RIGHT = '!ALLSEZONPORTFOLIORS';
 const SAMPLE_FILE_NAME = 'chart(871).xlsx';
@@ -125,18 +119,6 @@ function buildRelativeStrengthSeries(
     date: item.date,
     value: item.rawRatio * rsBase,
   }));
-}
-
-function parseNasdaqReference(text: string): NasdaqReference {
-  const rows = parseDelimitedText(text);
-  const parsed = rows.map((row) => ({
-    date: String(row.Date ?? ''),
-    event: String(row.Event ?? ''),
-    eventLevel: toNumber(row['Event Level']),
-    last: toNumber(row.Last),
-  }));
-  const firstLast = parsed.find((row) => row.last !== null)?.last ?? undefined;
-  return { rows: parsed, last: firstLast };
 }
 
 function formatNumber(value: number | null, digits = 4) {
@@ -425,8 +407,6 @@ function App() {
   const [rightColumn, setRightColumn] = useState('');
   const [boxPercent, setBoxPercent] = useState(DEFAULT_BOX_PERCENT);
   const [reversalBoxes, setReversalBoxes] = useState(DEFAULT_REVERSAL);
-  const [rsBase, setRsBase] = useState(100);
-  const [reference, setReference] = useState<NasdaqReference | null>(null);
   const [error, setError] = useState('');
 
   async function loadParsedFile(fileName: string, buffer: ArrayBuffer) {
@@ -440,9 +420,6 @@ function App() {
     setLeftColumn(nextLeft);
     setRightColumn(nextRight);
 
-    if (fileName === SAMPLE_FILE_NAME && nextLeft === SAMPLE_LEFT && nextRight === SAMPLE_RIGHT) {
-      setRsBase(SAMPLE_BASE);
-    }
   }
 
   async function handleFileUpload(event: ChangeEvent<HTMLInputElement>) {
@@ -457,60 +434,8 @@ function App() {
     }
   }
 
-  async function handleReferenceUpload(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    try {
-      const text = await file.text();
-      const parsedReference = parseNasdaqReference(text);
-      setReference(parsedReference);
-    } catch {
-      setError('Could not read the Nasdaq reference CSV.');
-    }
-  }
 
-  useEffect(() => {
-    async function loadSample() {
-      try {
-        const [sampleResponse, referenceResponse] = await Promise.all([
-          fetch('/sample/chart(871).xlsx'),
-          fetch('/reference/!AVCBLUE1 Nasdaq Dorsey Wright(8).csv'),
-        ]);
-        const [sampleBuffer, referenceText] = await Promise.all([sampleResponse.arrayBuffer(), referenceResponse.text()]);
-        await loadParsedFile(SAMPLE_FILE_NAME, sampleBuffer);
-        setReference(parseNasdaqReference(referenceText));
-      } catch {
-        // ignore bootstrap issues
-      }
-    }
-    loadSample();
-  }, []);
-
-  const numericColumns = useMemo(() => {
-    if (!parsed) return [];
-    return detectNumericColumns(parsed.rows, parsed.columns, dateColumn);
-  }, [parsed, dateColumn]);
-
-  const rawSeries = useMemo(() => {
-    if (!parsed || !dateColumn || !leftColumn || !rightColumn) return [];
-    return buildRawSeries(parsed.rows, dateColumn, leftColumn, rightColumn);
-  }, [parsed, dateColumn, leftColumn, rightColumn]);
-
-  useEffect(() => {
-    if (!reference?.last || !rawSeries.length) return;
-    const latestRaw = rawSeries[rawSeries.length - 1].rawRatio;
-    if (!Number.isFinite(latestRaw) || latestRaw <= 0) return;
-    if (Math.abs(rsBase - SAMPLE_BASE) < 1e-9 && reference.last === SAMPLE_BASE) return;
-  }, [reference, rawSeries, rsBase]);
-
-  const autoCalibratedBase = useMemo(() => {
-    if (!reference?.last || !rawSeries.length) return null;
-    const latestRaw = rawSeries[rawSeries.length - 1].rawRatio;
-    if (!Number.isFinite(latestRaw) || latestRaw <= 0) return null;
-    return reference.last / latestRaw;
-  }, [reference, rawSeries]);
-
-  const effectiveBase = autoCalibratedBase ?? rsBase;
+  const effectiveBase = 1;
 
   const rsSeries = useMemo(() => {
     if (!parsed || !dateColumn || !leftColumn || !rightColumn) return [];
@@ -544,10 +469,6 @@ function App() {
           <label className="upload-box">
             <span>Upload Excel / CSV with two assets</span>
             <input type="file" accept=".xlsx,.xls,.csv" onChange={handleFileUpload} />
-          </label>
-          <label className="upload-box secondary">
-            <span>Upload Nasdaq reference CSV</span>
-            <input type="file" accept=".csv" onChange={handleReferenceUpload} />
           </label>
           <div className="loaded-name">{parsed ? `Loaded: ${parsed.fileName}` : 'No data file loaded'}</div>
         </div>
@@ -586,18 +507,9 @@ function App() {
               <span>Reversal boxes</span>
               <input type="number" min="1" step="1" value={reversalBoxes} onChange={(e) => setReversalBoxes(Math.max(1, Number(e.target.value) || DEFAULT_REVERSAL))} />
             </label>
-            <label>
-              <span>RS base (manual)</span>
-              <input type="number" step="0.0001" value={rsBase} onChange={(e) => setRsBase(Number(e.target.value) || 100)} />
-            </label>
           </div>
         )}
 
-        {autoCalibratedBase && (
-          <div className="calibration-box">
-            Auto-calibration from Nasdaq reference is active. Effective RS base: <strong>{formatNumber(autoCalibratedBase, 6)}</strong>
-          </div>
-        )}
 
         {error && <div className="error-box">{error}</div>}
       </section>
@@ -620,8 +532,7 @@ function App() {
 
       <section className="panel note-box">
         <p>
-          The engine now uses a percentage point-and-figure grid like Nasdaq Dorsey Wright: raw RS is calculated as Asset 1 ÷ Asset 2,
-          then scaled by an RS base, placed on a fixed geometric grid, and reversed only after a full {reversalBoxes}-box move from the latest extreme.
+          The engine now calculates Relative Strength exactly as Asset 1 ÷ Asset 2, then places that ratio on a percentage point-and-figure grid and reverses only after a full {reversalBoxes}-box move from the latest extreme.
         </p>
       </section>
     </div>
