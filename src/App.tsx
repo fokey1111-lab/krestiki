@@ -255,6 +255,12 @@ function yearLabelForColumn(columns: PnfColumn[], index: number) {
   return year !== prevYear ? String(year) : '';
 }
 
+function yearLabelForColumnFromEnd(columns: PnfColumn[], index: number) {
+  const year = columns[index].startDate.getFullYear();
+  const nextYear = index < columns.length - 1 ? columns[index + 1].startDate.getFullYear() : null;
+  return year !== nextYear ? String(year) : '';
+}
+
 function App() {
   const [parsed, setParsed] = useState<ParsedFile | null>(null);
   const [dateColumn, setDateColumn] = useState('');
@@ -428,7 +434,15 @@ function PnfChart({ pnf }: { pnf: PnfResult }) {
   return (
     <div className="chart-wrap">
       <div className="chart-grid" style={{ width, minHeight: height }}>
-        <div className="axis top" style={{ gridTemplateColumns: `120px repeat(${columns.length}, ${cellSize}px) 120px` }}>
+        <div className="axis top axis-year" style={{ gridTemplateColumns: `120px repeat(${columns.length}, ${cellSize}px) 120px` }}>
+          <div className="axis-corner" />
+          {columns.map((col, i) => (
+            <div key={`top-year-${i}`} className="axis-year-cell" title={col.startDate.toISOString()}>{yearLabelForColumnFromEnd(columns, i)}</div>
+          ))}
+          <div className="axis-corner" />
+        </div>
+
+        <div className="axis top axis-columns" style={{ gridTemplateColumns: `120px repeat(${columns.length}, ${cellSize}px) 120px` }}>
           <div className="axis-corner" />
           {columns.map((_, i) => (
             <div key={`top-${i}`} className="axis-top-cell">{String(i + 1).padStart(2, '0')}</div>
