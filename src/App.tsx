@@ -471,7 +471,7 @@ function App() {
           <span>vs</span>
           <strong>{rightColumn || 'Asset 2'}</strong>
           <span>Scale:</span>
-          <strong>{formatNumber(boxPercent, 3)}%</strong>
+          <strong>{boxPercent.toFixed(3)}%</strong>
           <span>{rsSeries.length ? rsSeries[rsSeries.length - 1].date.toLocaleString('en-GB', { hour12: false }) : ''}</span>
         </div>
         <div className="headline-right">Image Source: NASDAQ DORSEY WRIGHT</div>
@@ -557,27 +557,22 @@ function App() {
         {pnf ? <PnfChart pnf={pnf} /> : <div className="empty-state">Not enough movement to build a chart yet.</div>}
       </section>
 
-      <section className="panel note-box">
-        <p>
-          In <strong>Raw ratio</strong> mode the site uses only Asset 1 ÷ Asset 2. In <strong>Nasdaq matched</strong> mode it keeps the same ratio shape but applies an auto multiplier so the latest RS Calc matches the Nasdaq value you enter. For your sample file, the default target is 568.6761.
-        </p>
-      </section>
     </div>
   );
 }
 
 function PnfChart({ pnf }: { pnf: PnfResult }) {
   const { columns, levels, cells } = pnf;
-  const cellSize = 22;
-  const leftAxis = 110;
-  const rightAxis = 110;
+  const cellSize = 16;
+  const leftAxis = 72;
+  const rightAxis = 72;
   const yearGroups = buildYearGroups(columns);
   const cellMap = new Map(cells.map((cell) => [`${cell.row}-${cell.col}`, cell]));
   const chartWidth = leftAxis + rightAxis + columns.length * cellSize;
 
   return (
     <div className="chart-wrap">
-      <div className="chart-grid" style={{ minWidth: Math.max(chartWidth, 1120) }}>
+      <div className="chart-grid" style={{ minWidth: Math.max(chartWidth, 1220) }}>
         <div className="year-band" style={{ gridTemplateColumns: `${leftAxis}px repeat(${columns.length}, ${cellSize}px) ${rightAxis}px` }}>
           <div />
           <div className="year-band-inner" style={{ gridColumn: `2 / span ${columns.length}` }}>
@@ -602,7 +597,7 @@ function PnfChart({ pnf }: { pnf: PnfResult }) {
                   </div>
                 );
               })}
-              <div className="axis-label">{level.toFixed(4)}</div>
+              <div className="axis-label right">{level.toFixed(4)}</div>
             </Fragment>
           ))}
         </div>
