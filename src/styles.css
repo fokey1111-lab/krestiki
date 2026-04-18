@@ -79,6 +79,17 @@ select, input {
   flex-wrap: wrap;
   margin-bottom: 10px;
 }
+.signal-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 3px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #fff;
+}
+.signal-pill.buy { background: var(--green); }
+.signal-pill.sell { background: var(--red); }
 .metrics {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
@@ -106,17 +117,23 @@ select, input {
   background: white;
   padding: 10px 0;
 }
-.axis.top, .body {
+.axis.top, .axis.bottom, .body {
   display: grid;
   align-items: stretch;
 }
-.axis-top-cell, .axis-corner {
+.axis-top-cell, .axis-corner, .axis-bottom-cell {
   height: 24px;
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 11px;
   color: #444;
+}
+.axis-bottom-cell {
+  height: 28px;
+  font-weight: 700;
+  color: #1f2937;
+  border-top: 1px solid #e5e7eb;
 }
 .axis-label {
   height: 22px;
@@ -140,6 +157,14 @@ select, input {
 }
 .cell-x { color: var(--green); }
 .cell-o { color: #444; }
+.signal-buy {
+  background: rgba(15, 157, 88, 0.18);
+  outline: 1px solid rgba(15, 157, 88, 0.38);
+}
+.signal-sell {
+  background: rgba(217, 48, 37, 0.16);
+  outline: 1px solid rgba(217, 48, 37, 0.34);
+}
 .marker {
   color: white;
   background: var(--green);

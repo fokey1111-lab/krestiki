@@ -1,15 +1,18 @@
-import { ChangeEvent, useEffect, useMemo, useState } from 'react';
+import { ChangeEvent, Fragment, useEffect, useMemo, useState } from 'react';
 import * as XLSX from 'xlsx';
 
 type Row = Record<string, unknown>;
 type ParsedFile = { rows: Row[]; columns: string[]; fileName: string };
-type PnfCell = { row: number; col: number; value: string; isMarker?: boolean };
+type SignalType = 'buy' | 'sell';
+type PnfCell = { row: number; col: number; value: string; isMarker?: boolean; signal?: SignalType };
 type PnfColumn = {
   type: 'X' | 'O';
   boxes: number[];
   startDate: Date;
   endDate: Date;
   markers: { box: number; label: string }[];
+  signal?: SignalType;
+  signalBox?: number;
 };
 type PnfResult = {
   columns: PnfColumn[];
@@ -19,6 +22,7 @@ type PnfResult = {
   previous: number | null;
   nextReversal: number | null;
   direction: 'X' | 'O' | null;
+  lastSignal: SignalType | null;
 };
 
 const monthMap = ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C'];
@@ -85,11 +89,38 @@ function buildRelativeStrengthSeries(rows: Row[], dateCol: string, leftCol: stri
 }
 
 function uniqueSortedDescending(values: number[]) {
-  return [...new Set(values)].sort((a, b) => b - a);
+  return [...new Set(values.map((v) => Number(v.toFixed(6))))].sort((a, b) => b - a);
 }
 
 function labelForDate(date: Date) {
   return monthMap[date.getMonth()];
+}
+
+function detectSignals(columns: PnfColumn[]) {
+  for (let i = 0; i < columns.length; i += 1) {
+    const current = columns[i];
+    if (current.type === 'X') {
+      const prevX = [...columns.slice(0, i)].reverse().find((col) => col.type === 'X');
+      if (prevX) {
+        const currentTop = current.boxes[current.boxes.length - 1];
+        const prevTop = prevX.boxes[prevX.boxes.length - 1];
+        if (currentTop > prevTop) {
+          current.signal = 'buy';
+          current.signalBox = currentTop;
+        }
+      }
+    } else {
+      const prevO = [...columns.slice(0, i)].reverse().find((col) => col.type === 'O');
+      if (prevO) {
+        const currentBottom = current.boxes[current.boxes.length - 1];
+        const prevBottom = prevO.boxes[prevO.boxes.length - 1];
+        if (currentBottom < prevBottom) {
+          current.signal = 'sell';
+          current.signalBox = currentBottom;
+        }
+      }
+    }
+  }
 }
 
 function createPnf(series: { date: Date; value: number }[], boxSize: number, reversalBoxes: number): PnfResult | null {
@@ -173,6 +204,8 @@ function createPnf(series: { date: Date; value: number }[], boxSize: number, rev
 
   if (!columns.length) return null;
 
+  detectSignals(columns);
+
   const allBoxes = columns.flatMap((col) => col.boxes);
   const levels = uniqueSortedDescending(allBoxes);
   const rowMap = new Map<number, number>(levels.map((level, index) => [Number(level.toFixed(6)), index]));
@@ -181,7 +214,10 @@ function createPnf(series: { date: Date; value: number }[], boxSize: number, rev
   columns.forEach((col, colIndex) => {
     col.boxes.forEach((box) => {
       const row = rowMap.get(Number(box.toFixed(6)));
-      if (row !== undefined) cells.push({ row, col: colIndex, value: col.type });
+      if (row !== undefined) {
+        const isSignal = col.signalBox !== undefined && Number(box.toFixed(6)) === Number(col.signalBox.toFixed(6));
+        cells.push({ row, col: colIndex, value: col.type, signal: isSignal ? col.signal : undefined });
+      }
     });
     col.markers.forEach((m) => {
       const row = rowMap.get(Number(m.box.toFixed(6)));
@@ -204,12 +240,19 @@ function createPnf(series: { date: Date; value: number }[], boxSize: number, rev
     previous,
     nextReversal,
     direction: last.type,
+    lastSignal: last.signal || null,
   };
 }
 
 function formatNumber(value: number | null, digits = 4) {
   if (value === null || !Number.isFinite(value)) return '—';
   return value.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+}
+
+function yearLabelForColumn(columns: PnfColumn[], index: number) {
+  const year = columns[index].startDate.getFullYear();
+  const prevYear = index > 0 ? columns[index - 1].startDate.getFullYear() : null;
+  return year !== prevYear ? String(year) : '';
 }
 
 function App() {
@@ -240,7 +283,7 @@ function App() {
       setDateColumn(detectedDate);
       setLeftColumn(numericCols[0] || '');
       setRightColumn(numericCols[1] || numericCols[0] || '');
-    } catch (e) {
+    } catch {
       setError('Could not read the file. Upload .xlsx, .xls or .csv.');
     }
   }
@@ -302,40 +345,38 @@ function App() {
         </div>
 
         {parsed && (
-          <>
-            <div className="control-grid">
-              <label>
-                <span>Date column</span>
-                <select value={dateColumn} onChange={(e) => setDateColumn(e.target.value)}>
-                  {parsed.columns.map((col) => <option key={col} value={col}>{col}</option>)}
-                </select>
-              </label>
-              <label>
-                <span>Asset 1</span>
-                <select value={leftColumn} onChange={(e) => setLeftColumn(e.target.value)}>
-                  {numericColumns.map((col) => <option key={col} value={col}>{col}</option>)}
-                </select>
-              </label>
-              <label>
-                <span>Asset 2</span>
-                <select value={rightColumn} onChange={(e) => setRightColumn(e.target.value)}>
-                  {numericColumns.map((col) => <option key={col} value={col}>{col}</option>)}
-                </select>
-              </label>
-              <label>
-                <span>Scale base</span>
-                <input type="number" step="1" value={scaleBase} onChange={(e) => setScaleBase(Number(e.target.value) || 100)} />
-              </label>
-              <label>
-                <span>Box size</span>
-                <input type="number" step="0.01" value={boxSize} onChange={(e) => setBoxSize(Number(e.target.value) || 1)} />
-              </label>
-              <label>
-                <span>Reversal</span>
-                <input type="number" step="1" min="1" value={reversalBoxes} onChange={(e) => setReversalBoxes(Math.max(1, Number(e.target.value) || 3))} />
-              </label>
-            </div>
-          </>
+          <div className="control-grid">
+            <label>
+              <span>Date column</span>
+              <select value={dateColumn} onChange={(e) => setDateColumn(e.target.value)}>
+                {parsed.columns.map((col) => <option key={col} value={col}>{col}</option>)}
+              </select>
+            </label>
+            <label>
+              <span>Asset 1</span>
+              <select value={leftColumn} onChange={(e) => setLeftColumn(e.target.value)}>
+                {numericColumns.map((col) => <option key={col} value={col}>{col}</option>)}
+              </select>
+            </label>
+            <label>
+              <span>Asset 2</span>
+              <select value={rightColumn} onChange={(e) => setRightColumn(e.target.value)}>
+                {numericColumns.map((col) => <option key={col} value={col}>{col}</option>)}
+              </select>
+            </label>
+            <label>
+              <span>Scale base</span>
+              <input type="number" step="1" value={scaleBase} onChange={(e) => setScaleBase(Number(e.target.value) || 100)} />
+            </label>
+            <label>
+              <span>Box size</span>
+              <input type="number" step="0.01" value={boxSize} onChange={(e) => setBoxSize(Number(e.target.value) || 1)} />
+            </label>
+            <label>
+              <span>Reversal</span>
+              <input type="number" step="1" min="1" value={reversalBoxes} onChange={(e) => setReversalBoxes(Math.max(1, Number(e.target.value) || 3))} />
+            </label>
+          </div>
         )}
 
         {error && <div className="error-box">{error}</div>}
@@ -346,6 +387,7 @@ function App() {
           <strong>{leftColumn || 'Asset 1'}</strong>
           <span>vs</span>
           <strong>{rightColumn || 'Asset 2'}</strong>
+          {pnf?.lastSignal && <span className={`signal-pill ${pnf.lastSignal}`}>{pnf.lastSignal === 'buy' ? 'Buy Signal' : 'Sell Signal'}</span>}
         </div>
         <div className="metrics">
           <div className="metric"><span>RS Calc</span><strong>{formatNumber(currentRaw, 4)}</strong></div>
@@ -370,7 +412,7 @@ function App() {
       <section className="panel notes">
         <h3>How it works</h3>
         <p>The app reads two numeric columns from Excel, calculates relative strength as Asset 1 ÷ Asset 2 × Scale Base, then builds a point & figure chart using your box size and reversal settings.</p>
-        <p>Use this to compare two strategies, indexes, funds, or portfolios in the same dataset.</p>
+        <p>Green cells mark buy signals when an X-column breaks above the prior X-column high. Red cells mark sell signals when an O-column breaks below the prior O-column low. Years are shown under the column axis.</p>
       </section>
     </div>
   );
@@ -380,7 +422,7 @@ function PnfChart({ pnf }: { pnf: PnfResult }) {
   const { columns, priceLevels, cells } = pnf;
   const cellSize = 22;
   const width = Math.max(columns.length * cellSize + 160, 960);
-  const height = priceLevels.length * cellSize + 80;
+  const height = priceLevels.length * cellSize + 120;
   const cellMap = new Map(cells.map((cell) => [`${cell.row}-${cell.col}`, cell]));
 
   return (
@@ -388,7 +430,7 @@ function PnfChart({ pnf }: { pnf: PnfResult }) {
       <div className="chart-grid" style={{ width, minHeight: height }}>
         <div className="axis top" style={{ gridTemplateColumns: `120px repeat(${columns.length}, ${cellSize}px) 120px` }}>
           <div className="axis-corner" />
-          {columns.map((col, i) => (
+          {columns.map((_, i) => (
             <div key={`top-${i}`} className="axis-top-cell">{String(i + 1).padStart(2, '0')}</div>
           ))}
           <div className="axis-corner" />
@@ -396,19 +438,30 @@ function PnfChart({ pnf }: { pnf: PnfResult }) {
 
         <div className="body" style={{ gridTemplateColumns: `120px repeat(${columns.length}, ${cellSize}px) 120px` }}>
           {priceLevels.map((level, rowIndex) => (
-            <>
-              <div key={`left-${rowIndex}`} className="axis-label">{level.toFixed(4)}</div>
+            <Fragment key={`row-${rowIndex}`}>
+              <div className="axis-label">{level.toFixed(4)}</div>
               {columns.map((_, colIndex) => {
                 const cell = cellMap.get(`${rowIndex}-${colIndex}`);
                 return (
-                  <div key={`${rowIndex}-${colIndex}`} className={`grid-cell ${cell?.value === 'X' ? 'cell-x' : ''} ${cell?.value === 'O' ? 'cell-o' : ''}`}>
+                  <div
+                    key={`${rowIndex}-${colIndex}`}
+                    className={`grid-cell ${cell?.value === 'X' ? 'cell-x' : ''} ${cell?.value === 'O' ? 'cell-o' : ''} ${cell?.signal === 'buy' ? 'signal-buy' : ''} ${cell?.signal === 'sell' ? 'signal-sell' : ''}`}
+                  >
                     {cell ? <span className={cell.isMarker ? 'marker' : ''}>{cell.value}</span> : null}
                   </div>
                 );
               })}
-              <div key={`right-${rowIndex}`} className="axis-label">{level.toFixed(4)}</div>
-            </>
+              <div className="axis-label">{level.toFixed(4)}</div>
+            </Fragment>
           ))}
+        </div>
+
+        <div className="axis bottom" style={{ gridTemplateColumns: `120px repeat(${columns.length}, ${cellSize}px) 120px` }}>
+          <div className="axis-corner" />
+          {columns.map((col, i) => (
+            <div key={`bottom-${i}`} className="axis-bottom-cell" title={col.startDate.toISOString()}>{yearLabelForColumn(columns, i)}</div>
+          ))}
+          <div className="axis-corner" />
         </div>
       </div>
     </div>
