@@ -1,32 +1,33 @@
-# Point & Figure Relative Strength
+# Point & Figure Relative Strength Site
 
-NASDAQ-style website for loading Excel/CSV files and building a Point & Figure Relative Strength chart for two assets.
+Готовый проект сайта для построения графика крестиков и ноликов по двум активам в стиле Nasdaq Relative Strength.
 
-## Run
+## Что умеет
+- загружать Excel или CSV
+- выбирать колонку даты и два актива
+- считать относительную силу: Asset 1 / Asset 2 * Scale Base
+- строить Point & Figure chart
+- менять Box Size и Reversal
+- показывать текущий RS, предыдущий close и уровень следующего reversal
 
+## Запуск
 ```bash
 npm install
 npm run dev
 ```
 
-## Build
-
+## Сборка
 ```bash
 npm run build
 ```
 
-## Relative Strength formula
+## Структура Excel
+Первая колонка — дата, остальные числовые колонки — значения активов.
 
-```text
-((Asset 1 / first Asset 1) / (Asset 2 / first Asset 2)) × Scale Base
-```
+Пример:
+- DateTime
+- !AVCBLUE1
+- !ALLSEZONPORTFOLIORS
 
-## Features
-
-- upload .xlsx / .xls / .csv
-- choose two assets
-- years at the top and bottom of chart
-- green buy signals
-- red sell signals
-- month markers inside columns
-- percent box scaling and reversal controls
+## Деплой
+Можно залить на Vercel как обычный Vite-проект.

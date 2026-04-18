@@ -7,7 +7,7 @@ type SignalType = 'buy' | 'sell';
 type PnfCell = { row: number; col: number; value: string; isMarker?: boolean; signal?: SignalType };
 type PnfColumn = {
   type: 'X' | 'O';
-  boxes: number[];
+  boxes: number[]; // box indices on percentage scale
   startDate: Date;
   endDate: Date;
   markers: { box: number; label: string }[];
@@ -16,11 +16,12 @@ type PnfColumn = {
 };
 type PnfResult = {
   columns: PnfColumn[];
-  priceLevels: number[];
+  priceLevels: number[]; // rendered price values
   cells: PnfCell[];
   current: number;
   previous: number | null;
   nextReversal: number | null;
+  nextReversalPct: number | null;
   direction: 'X' | 'O' | null;
   lastSignal: SignalType | null;
 };
@@ -97,10 +98,6 @@ function buildRelativeStrengthSeries(rows: Row[], dateCol: string, leftCol: stri
   }));
 }
 
-function uniqueSortedDescending(values: number[]) {
-  return [...new Set(values.map((v) => Number(v.toFixed(6))))].sort((a, b) => b - a);
-}
-
 function labelForDate(date: Date) {
   return monthMap[date.getMonth()];
 }
@@ -132,37 +129,47 @@ function detectSignals(columns: PnfColumn[]) {
   }
 }
 
-function createPnf(series: { date: Date; value: number }[], boxSize: number, reversalBoxes: number): PnfResult | null {
-  if (!series.length || boxSize <= 0 || reversalBoxes < 1) return null;
+function getBoxIndex(value: number, anchor: number, step: number) {
+  const raw = Math.log(value / anchor) / Math.log(step);
+  if (!Number.isFinite(raw)) return 0;
+  return Math.floor(raw + 1e-12);
+}
+
+function levelFromIndex(index: number, anchor: number, step: number) {
+  return anchor * step ** index;
+}
+
+function createPnf(series: { date: Date; value: number }[], boxPercent: number, reversalBoxes: number): PnfResult | null {
+  if (!series.length || boxPercent <= 0 || reversalBoxes < 1) return null;
+
+  const step = 1 + boxPercent / 100;
+  const anchor = series[0].value;
+  if (!(anchor > 0) || !(step > 1)) return null;
 
   const columns: PnfColumn[] = [];
   let currentCol: PnfColumn | null = null;
-
-  const anchor = Math.floor(series[0].value / boxSize) * boxSize;
-  let lastBox = anchor;
+  let lastIndex = getBoxIndex(series[0].value, anchor, step);
 
   for (let i = 1; i < series.length; i += 1) {
     const { date, value } = series[i];
+    const valueIndex = getBoxIndex(value, anchor, step);
+
     if (!currentCol) {
-      if (value >= lastBox + boxSize) {
+      if (valueIndex >= lastIndex + 1) {
         const boxes: number[] = [];
-        for (let p = lastBox + boxSize; p <= Math.floor(value / boxSize) * boxSize + 1e-9; p += boxSize) {
-          boxes.push(Number(p.toFixed(6)));
-        }
+        for (let idx = lastIndex + 1; idx <= valueIndex; idx += 1) boxes.push(idx);
         if (boxes.length) {
           currentCol = { type: 'X', boxes, startDate: date, endDate: date, markers: [{ box: boxes[0], label: labelForDate(date) }] };
           columns.push(currentCol);
-          lastBox = boxes[boxes.length - 1];
+          lastIndex = boxes[boxes.length - 1];
         }
-      } else if (value <= lastBox - boxSize) {
+      } else if (valueIndex <= lastIndex - 1) {
         const boxes: number[] = [];
-        for (let p = lastBox - boxSize; p >= Math.ceil(value / boxSize) * boxSize - 1e-9; p -= boxSize) {
-          boxes.push(Number(p.toFixed(6)));
-        }
+        for (let idx = lastIndex - 1; idx >= valueIndex; idx -= 1) boxes.push(idx);
         if (boxes.length) {
           currentCol = { type: 'O', boxes, startDate: date, endDate: date, markers: [{ box: boxes[0], label: labelForDate(date) }] };
           columns.push(currentCol);
-          lastBox = boxes[boxes.length - 1];
+          lastIndex = boxes[boxes.length - 1];
         }
       }
       continue;
@@ -170,43 +177,39 @@ function createPnf(series: { date: Date; value: number }[], boxSize: number, rev
 
     if (currentCol.type === 'X') {
       const top = currentCol.boxes[currentCol.boxes.length - 1];
-      if (value >= top + boxSize) {
-        const start = top + boxSize;
-        const end = Math.floor(value / boxSize) * boxSize;
-        for (let p = start; p <= end + 1e-9; p += boxSize) currentCol.boxes.push(Number(p.toFixed(6)));
+      if (valueIndex >= top + 1) {
+        const start = top + 1;
+        for (let idx = start; idx <= valueIndex; idx += 1) currentCol.boxes.push(idx);
         currentCol.endDate = date;
         if (currentCol.markers[currentCol.markers.length - 1]?.label !== labelForDate(date)) {
-          currentCol.markers.push({ box: Number(start.toFixed(6)), label: labelForDate(date) });
+          currentCol.markers.push({ box: start, label: labelForDate(date) });
         }
-        lastBox = currentCol.boxes[currentCol.boxes.length - 1];
-      } else if (value <= top - reversalBoxes * boxSize) {
-        const first = top - boxSize;
-        const end = Math.ceil(value / boxSize) * boxSize;
+        lastIndex = currentCol.boxes[currentCol.boxes.length - 1];
+      } else if (valueIndex <= top - reversalBoxes) {
+        const first = top - 1;
         const boxes: number[] = [];
-        for (let p = first; p >= end - 1e-9; p -= boxSize) boxes.push(Number(p.toFixed(6)));
+        for (let idx = first; idx >= valueIndex; idx -= 1) boxes.push(idx);
         currentCol = { type: 'O', boxes, startDate: date, endDate: date, markers: [{ box: boxes[0], label: labelForDate(date) }] };
         columns.push(currentCol);
-        lastBox = currentCol.boxes[currentCol.boxes.length - 1];
+        lastIndex = currentCol.boxes[currentCol.boxes.length - 1];
       }
     } else {
       const bottom = currentCol.boxes[currentCol.boxes.length - 1];
-      if (value <= bottom - boxSize) {
-        const start = bottom - boxSize;
-        const end = Math.ceil(value / boxSize) * boxSize;
-        for (let p = start; p >= end - 1e-9; p -= boxSize) currentCol.boxes.push(Number(p.toFixed(6)));
+      if (valueIndex <= bottom - 1) {
+        const start = bottom - 1;
+        for (let idx = start; idx >= valueIndex; idx -= 1) currentCol.boxes.push(idx);
         currentCol.endDate = date;
         if (currentCol.markers[currentCol.markers.length - 1]?.label !== labelForDate(date)) {
-          currentCol.markers.push({ box: Number(start.toFixed(6)), label: labelForDate(date) });
+          currentCol.markers.push({ box: start, label: labelForDate(date) });
         }
-        lastBox = currentCol.boxes[currentCol.boxes.length - 1];
-      } else if (value >= bottom + reversalBoxes * boxSize) {
-        const first = bottom + boxSize;
-        const end = Math.floor(value / boxSize) * boxSize;
+        lastIndex = currentCol.boxes[currentCol.boxes.length - 1];
+      } else if (valueIndex >= bottom + reversalBoxes) {
+        const first = bottom + 1;
         const boxes: number[] = [];
-        for (let p = first; p <= end + 1e-9; p += boxSize) boxes.push(Number(p.toFixed(6)));
+        for (let idx = first; idx <= valueIndex; idx += 1) boxes.push(idx);
         currentCol = { type: 'X', boxes, startDate: date, endDate: date, markers: [{ box: boxes[0], label: labelForDate(date) }] };
         columns.push(currentCol);
-        lastBox = currentCol.boxes[currentCol.boxes.length - 1];
+        lastIndex = currentCol.boxes[currentCol.boxes.length - 1];
       }
     }
   }
@@ -215,39 +218,44 @@ function createPnf(series: { date: Date; value: number }[], boxSize: number, rev
 
   detectSignals(columns);
 
-  const allBoxes = columns.flatMap((col) => col.boxes);
-  const levels = uniqueSortedDescending(allBoxes);
-  const rowMap = new Map<number, number>(levels.map((level, index) => [Number(level.toFixed(6)), index]));
+  const allBoxes = [...new Set(columns.flatMap((col) => col.boxes))].sort((a, b) => b - a);
+  const rowMap = new Map<number, number>(allBoxes.map((level, index) => [level, index]));
   const cells: PnfCell[] = [];
 
   columns.forEach((col, colIndex) => {
     col.boxes.forEach((box) => {
-      const row = rowMap.get(Number(box.toFixed(6)));
+      const row = rowMap.get(box);
       if (row !== undefined) {
-        const isSignal = col.signalBox !== undefined && Number(box.toFixed(6)) === Number(col.signalBox.toFixed(6));
+        const isSignal = col.signalBox !== undefined && box === col.signalBox;
         cells.push({ row, col: colIndex, value: col.type, signal: isSignal ? col.signal : undefined });
       }
     });
     col.markers.forEach((m) => {
-      const row = rowMap.get(Number(m.box.toFixed(6)));
+      const row = rowMap.get(m.box);
       if (row !== undefined) cells.push({ row, col: colIndex, value: m.label, isMarker: true });
     });
   });
 
+  const priceLevels = allBoxes.map((idx) => levelFromIndex(idx, anchor, step));
   const last = columns[columns.length - 1];
-  const current = last.boxes[last.boxes.length - 1];
-  const previous = columns.length > 1 ? columns[columns.length - 2].boxes[columns[columns.length - 2].boxes.length - 1] : null;
-  const nextReversal = last.type === 'X'
-    ? current - reversalBoxes * boxSize
-    : current + reversalBoxes * boxSize;
+  const current = levelFromIndex(last.boxes[last.boxes.length - 1], anchor, step);
+  const previous = columns.length > 1
+    ? levelFromIndex(columns[columns.length - 2].boxes[columns[columns.length - 2].boxes.length - 1], anchor, step)
+    : null;
+  const reversalIndex = last.type === 'X'
+    ? last.boxes[last.boxes.length - 1] - reversalBoxes
+    : last.boxes[last.boxes.length - 1] + reversalBoxes;
+  const nextReversal = levelFromIndex(reversalIndex, anchor, step);
+  const nextReversalPct = current > 0 && nextReversal > 0 ? Math.abs((nextReversal / current - 1) * 100) : null;
 
   return {
     columns,
-    priceLevels: levels,
+    priceLevels,
     cells,
     current,
     previous,
     nextReversal,
+    nextReversalPct,
     direction: last.type,
     lastSignal: last.signal || null,
   };
@@ -280,6 +288,20 @@ function App() {
   const [scaleBase, setScaleBase] = useState(100);
   const [error, setError] = useState('');
 
+  async function parseBuffer(buffer: ArrayBuffer, fileName: string) {
+    const workbook = XLSX.read(buffer, { type: 'array', cellDates: true });
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json<Row>(sheet, { defval: null, raw: true });
+    const columns = rows.length ? Object.keys(rows[0]) : [];
+    const nextParsed = { rows, columns, fileName };
+    setParsed(nextParsed);
+    const detectedDate = detectDateColumn(rows, columns);
+    const numericCols = detectNumericColumns(rows, columns, detectedDate);
+    setDateColumn(detectedDate);
+    setLeftColumn(numericCols[0] || '');
+    setRightColumn(numericCols[1] || numericCols[0] || '');
+  }
+
   async function handleFileUpload(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -287,17 +309,7 @@ function App() {
 
     try {
       const buffer = await file.arrayBuffer();
-      const workbook = XLSX.read(buffer, { type: 'array', cellDates: true });
-      const sheet = workbook.Sheets[workbook.SheetNames[0]];
-      const rows = XLSX.utils.sheet_to_json<Row>(sheet, { defval: null, raw: true });
-      const columns = rows.length ? Object.keys(rows[0]) : [];
-      const nextParsed = { rows, columns, fileName: file.name };
-      setParsed(nextParsed);
-      const detectedDate = detectDateColumn(rows, columns);
-      const numericCols = detectNumericColumns(rows, columns, detectedDate);
-      setDateColumn(detectedDate);
-      setLeftColumn(numericCols[0] || '');
-      setRightColumn(numericCols[1] || numericCols[0] || '');
+      await parseBuffer(buffer, file.name);
     } catch {
       setError('Could not read the file. Upload .xlsx, .xls or .csv.');
     }
@@ -308,17 +320,7 @@ function App() {
       try {
         const response = await fetch('/sample/chart(871).xlsx');
         const buffer = await response.arrayBuffer();
-        const workbook = XLSX.read(buffer, { type: 'array', cellDates: true });
-        const sheet = workbook.Sheets[workbook.SheetNames[0]];
-        const rows = XLSX.utils.sheet_to_json<Row>(sheet, { defval: null, raw: true });
-        const columns = rows.length ? Object.keys(rows[0]) : [];
-        const nextParsed = { rows, columns, fileName: 'chart(871).xlsx' };
-        setParsed(nextParsed);
-        const detectedDate = detectDateColumn(rows, columns);
-        const numericCols = detectNumericColumns(rows, columns, detectedDate);
-        setDateColumn(detectedDate);
-        setLeftColumn(numericCols[0] || '');
-        setRightColumn(numericCols[1] || numericCols[0] || '');
+        await parseBuffer(buffer, 'chart(871).xlsx');
       } catch {
         // ignore sample loading issues
       }
@@ -384,7 +386,7 @@ function App() {
               <input type="number" step="1" value={scaleBase} onChange={(e) => setScaleBase(Number(e.target.value) || 100)} />
             </label>
             <label>
-              <span>Box size</span>
+              <span>Box size (%)</span>
               <input type="number" step="0.01" value={boxSize} onChange={(e) => setBoxSize(Number(e.target.value) || 1)} />
             </label>
             <label>
@@ -406,12 +408,13 @@ function App() {
         </div>
         <div className="metrics">
           <div className="metric"><span>RS Calc</span><strong>{formatNumber(currentRaw, 4)}</strong></div>
-          <div className="metric"><span>Box size</span><strong>{formatNumber(boxSize, 2)}</strong></div>
+          <div className="metric"><span>Box size</span><strong>{formatNumber(boxSize, 2)}%</strong></div>
           <div className="metric"><span>Reversal</span><strong>{reversalBoxes}</strong></div>
           <div className="metric"><span>Previous close</span><strong>{formatNumber(previousRaw, 4)}</strong></div>
           <div className="metric"><span>Δ</span><strong className={changeRaw !== null && changeRaw < 0 ? 'down' : 'up'}>{formatNumber(changeRaw, 4)}</strong></div>
           <div className="metric"><span>Δ %</span><strong className={pctChange !== null && pctChange < 0 ? 'down' : 'up'}>{formatNumber(pctChange, 2)}%</strong></div>
           <div className="metric"><span>Next reversal</span><strong>{pnf ? formatNumber(pnf.nextReversal, 4) : '—'}</strong></div>
+          <div className="metric"><span>Next reversal %</span><strong>{pnf ? formatNumber(pnf.nextReversalPct, 2) : '—'}%</strong></div>
           <div className="metric"><span>Direction</span><strong>{pnf?.direction || '—'}</strong></div>
         </div>
       </section>
@@ -420,14 +423,14 @@ function App() {
         {pnf ? (
           <PnfChart pnf={pnf} />
         ) : (
-          <div className="empty-state">Not enough movement yet to build a point & figure chart. Try a smaller box size.</div>
+          <div className="empty-state">Not enough movement yet to build a point & figure chart. Try a smaller percentage box size.</div>
         )}
       </section>
 
       <section className="panel notes">
         <h3>How it works</h3>
         <p>The app reads two numeric columns from Excel, normalizes both series from the first valid date, then calculates relative strength as ((Asset 1 ÷ first Asset 1) ÷ (Asset 2 ÷ first Asset 2)) × Scale Base.</p>
-        <p>Green cells mark buy signals when an X-column breaks above the prior X-column high. Red cells mark sell signals when an O-column breaks below the prior O-column low. Years are shown under the column axis.</p>
+        <p>The point & figure engine now uses a percentage box scale like Nasdaq-style RS charts. A 3.25 box size means every next box is 3.25% above or below the prior box, not a fixed absolute step.</p>
       </section>
     </div>
   );
