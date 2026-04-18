@@ -1,33 +1,26 @@
-# Point & Figure Relative Strength Site
+# P&F Relative Strength — DW-style percentage scale
 
-Готовый проект сайта для построения графика крестиков и ноликов по двум активам в стиле Nasdaq Relative Strength.
+Vite + React project for building a Nasdaq Dorsey Wright style point & figure relative strength chart from two asset series.
 
-## Что умеет
-- загружать Excel или CSV
-- выбирать колонку даты и два актива
-- считать относительную силу: Asset 1 / Asset 2 * Scale Base
-- строить Point & Figure chart
-- менять Box Size и Reversal
-- показывать текущий RS, предыдущий close и уровень следующего reversal
+## Run
 
-## Запуск
 ```bash
 npm install
 npm run dev
 ```
 
-## Сборка
+## Build
+
 ```bash
 npm run build
 ```
 
-## Структура Excel
-Первая колонка — дата, остальные числовые колонки — значения активов.
+## What changed
 
-Пример:
-- DateTime
-- !AVCBLUE1
-- !ALLSEZONPORTFOLIORS
+- Relative Strength is calculated as `Asset 1 / Asset 2 * RS base`
+- Percentage box scale uses a fixed geometric grid
+- Reversal logic uses full `N`-box moves from the latest extreme
+- Top and bottom year bands match the Nasdaq-style layout more closely
+- Optional Nasdaq reference CSV auto-calibrates the RS base from the latest DW value
 
-## Деплой
-Можно залить на Vercel как обычный Vite-проект.
+Sample files are included in `public/sample` and `public/reference`.
