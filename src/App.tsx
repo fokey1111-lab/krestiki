@@ -88,13 +88,9 @@ function buildRelativeStrengthSeries(rows: Row[], dateCol: string, leftCol: stri
   aligned.sort((a, b) => a.date.getTime() - b.date.getTime());
   if (!aligned.length) return [];
 
-  const baseLeft = aligned[0].left;
-  const baseRight = aligned[0].right;
-  if (baseLeft <= 0 || baseRight <= 0) return [];
-
   return aligned.map((item) => ({
     date: item.date,
-    value: ((item.left / baseLeft) / (item.right / baseRight)) * scaleBase,
+    value: (item.left / item.right) * scaleBase,
   }));
 }
 
@@ -143,8 +139,8 @@ function createPnf(series: { date: Date; value: number }[], boxPercent: number, 
   if (!series.length || boxPercent <= 0 || reversalBoxes < 1) return null;
 
   const step = 1 + boxPercent / 100;
-  const anchor = series[0].value;
-  if (!(anchor > 0) || !(step > 1)) return null;
+  const anchor = 1;
+  if (!(step > 1)) return null;
 
   const columns: PnfColumn[] = [];
   let currentCol: PnfColumn | null = null;
@@ -429,8 +425,8 @@ function App() {
 
       <section className="panel notes">
         <h3>How it works</h3>
-        <p>The app reads two numeric columns from Excel, normalizes both series from the first valid date, then calculates relative strength as ((Asset 1 ÷ first Asset 1) ÷ (Asset 2 ÷ first Asset 2)) × Scale Base.</p>
-        <p>The point & figure engine now uses a percentage box scale like Nasdaq-style RS charts. A 3.25 box size means every next box is 3.25% above or below the prior box, not a fixed absolute step.</p>
+        <p>The app reads two numeric columns from Excel and calculates relative strength the Nasdaq-style way: (Asset 1 ÷ Asset 2) × Scale Base.</p>
+        <p>The point & figure engine uses a percentage box scale anchored to 1. This keeps the box ladder stable across files, which is how Nasdaq-style percentage scaling behaves.</p>
       </section>
     </div>
   );
