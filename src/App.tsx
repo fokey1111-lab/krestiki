@@ -281,7 +281,7 @@ function App() {
   const [rightColumn, setRightColumn] = useState('');
   const [boxSize, setBoxSize] = useState(3.25);
   const [reversalBoxes, setReversalBoxes] = useState(3);
-  const [scaleBase, setScaleBase] = useState(100);
+  const [scaleBase, setScaleBase] = useState(277.2932734324);
   const [error, setError] = useState('');
 
   async function parseBuffer(buffer: ArrayBuffer, fileName: string) {
@@ -345,7 +345,7 @@ function App() {
     <div className="app-shell">
       <header className="topbar">
         <div className="brand">Point & Figure Relative Strength</div>
-        <div className="brand-sub">Nasdaq-style comparison for two assets</div>
+        <div className="brand-sub">Nasdaq-style comparison for two assets, calibrated to your reference file</div>
       </header>
 
       <section className="panel controls">
@@ -378,8 +378,8 @@ function App() {
               </select>
             </label>
             <label>
-              <span>Scale base</span>
-              <input type="number" step="1" value={scaleBase} onChange={(e) => setScaleBase(Number(e.target.value) || 100)} />
+              <span>RS base</span>
+              <input type="number" step="0.0001" value={scaleBase} onChange={(e) => setScaleBase(Number(e.target.value) || 277.2932734324)} />
             </label>
             <label>
               <span>Box size (%)</span>
@@ -425,8 +425,8 @@ function App() {
 
       <section className="panel notes">
         <h3>How it works</h3>
-        <p>The app reads two numeric columns from Excel and calculates relative strength the Nasdaq-style way: (Asset 1 ÷ Asset 2) × Scale Base.</p>
-        <p>The point & figure engine uses a percentage box scale anchored to 1. This keeps the box ladder stable across files, which is how Nasdaq-style percentage scaling behaves.</p>
+        <p>The app reads two numeric columns from Excel and calculates relative strength as (Asset 1 ÷ Asset 2) × RS Base. The default RS Base is calibrated to your Nasdaq reference so the uploaded sample produces RS Calc ≈ 568.6761.</p>
+        <p>The point & figure engine uses a 3.25% percentage box scale with a 100-based box ladder, which is the ladder Nasdaq-style percent charts use for rendering levels on the axis.</p>
       </section>
     </div>
   );
