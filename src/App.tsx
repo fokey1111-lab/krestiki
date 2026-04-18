@@ -1,9 +1,10 @@
-import { ChangeEvent, Fragment, useEffect, useMemo, useState } from 'react';
+import { ChangeEvent, Fragment, useMemo, useState } from 'react';
 import * as XLSX from 'xlsx';
 
 type Row = Record<string, unknown>;
 type ParsedFile = { rows: Row[]; columns: string[]; fileName: string };
 type SignalType = 'buy' | 'sell';
+type ScaleMode = 'raw' | 'nasdaq';
 
 type Marker = { level: number; label: string };
 
@@ -15,7 +16,6 @@ type PnfColumn = {
   markers: Marker[];
   signal?: SignalType;
   signalBox?: number;
-  reversalLevel?: number;
 };
 
 type PnfCell = {
@@ -35,16 +35,15 @@ type PnfResult = {
   lastSignal: SignalType | null;
   direction: 'X' | 'O' | null;
   nextReversal: number | null;
-  chartHigh: number;
-  chartLow: number;
 };
 
+type SeriesItem = { date: Date; rawRatio: number; value: number };
+
 const MONTH_MAP = ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C'];
-const SAMPLE_LEFT = '!AVCBLUE1';
-const SAMPLE_RIGHT = '!ALLSEZONPORTFOLIORS';
-const SAMPLE_FILE_NAME = 'chart(871).xlsx';
 const DEFAULT_BOX_PERCENT = 3.25;
 const DEFAULT_REVERSAL = 3;
+const SAMPLE_FILE_NAME = 'chart(871).xlsx';
+const SAMPLE_TARGET_RS = 568.6761;
 
 function toDate(value: unknown): Date | null {
   if (value instanceof Date && !Number.isNaN(value.getTime())) return value;
@@ -54,7 +53,8 @@ function toDate(value: unknown): Date | null {
     return Number.isNaN(date.getTime()) ? null : date;
   }
   if (typeof value === 'string') {
-    const date = new Date(value);
+    const normalized = value.replace(/\./g, '-').replace(/\//g, '-');
+    const date = new Date(normalized);
     return Number.isNaN(date.getTime()) ? null : date;
   }
   return null;
@@ -113,11 +113,12 @@ function buildRelativeStrengthSeries(
   dateCol: string,
   leftCol: string,
   rightCol: string,
-  rsBase: number,
+  scaleFactor: number,
 ) {
   return buildRawSeries(rows, dateCol, leftCol, rightCol).map((item) => ({
     date: item.date,
-    value: item.rawRatio * rsBase,
+    rawRatio: item.rawRatio,
+    value: item.rawRatio * scaleFactor,
   }));
 }
 
@@ -170,9 +171,8 @@ function buildLevels(minLevel: number, maxLevel: number, step: number, padding =
   }
   const levels: number[] = [];
   let current = high;
-  const guard = 2500;
   let loops = 0;
-  while (current >= low && loops < guard) {
+  while (current >= low && loops < 2500) {
     levels.push(Number(current.toFixed(4)));
     current = nextDown(current, step);
     loops += 1;
@@ -207,7 +207,7 @@ function detectSignals(columns: PnfColumn[]) {
   }
 }
 
-function createPnf(series: { date: Date; value: number }[], boxPercent: number, reversalBoxes: number): PnfResult | null {
+function createPnf(series: SeriesItem[], boxPercent: number, reversalBoxes: number): PnfResult | null {
   if (!series.length || boxPercent <= 0 || reversalBoxes < 1) return null;
 
   const step = percentStep(boxPercent);
@@ -233,7 +233,6 @@ function createPnf(series: { date: Date; value: number }[], boxPercent: number, 
             startDate: date,
             endDate: date,
             markers: [{ level: boxes[0], label: labelForDate(date) }],
-            reversalLevel: boxes[boxes.length - 1],
           };
           columns.push(currentColumn);
         }
@@ -252,7 +251,6 @@ function createPnf(series: { date: Date; value: number }[], boxPercent: number, 
             startDate: date,
             endDate: date,
             markers: [{ level: boxes[0], label: labelForDate(date) }],
-            reversalLevel: boxes[boxes.length - 1],
           };
           columns.push(currentColumn);
         }
@@ -289,8 +287,7 @@ function createPnf(series: { date: Date; value: number }[], boxPercent: number, 
           boxes,
           startDate: date,
           endDate: date,
-          markers: [{ level: boxes[boxes.length - 1], label: labelForDate(date) }],
-          reversalLevel: boxes[boxes.length - 1],
+          markers: [{ level: boxes[0], label: labelForDate(date) }],
         };
         columns.push(currentColumn);
       }
@@ -323,8 +320,7 @@ function createPnf(series: { date: Date; value: number }[], boxPercent: number, 
           boxes,
           startDate: date,
           endDate: date,
-          markers: [{ level: boxes[boxes.length - 1], label: labelForDate(date) }],
-          reversalLevel: boxes[boxes.length - 1],
+          markers: [{ level: boxes[0], label: labelForDate(date) }],
         };
         columns.push(currentColumn);
       }
@@ -356,12 +352,13 @@ function createPnf(series: { date: Date; value: number }[], boxPercent: number, 
   });
 
   const lastColumn = columns[columns.length - 1];
-  const current = lastColumn.boxes[lastColumn.boxes.length - 1];
+  const current = series[series.length - 1].value;
   const previous = series.length > 1 ? series[series.length - 2].value : null;
+  const currentExtreme = lastColumn.boxes[lastColumn.boxes.length - 1];
   const nextReversal =
     lastColumn.type === 'X'
-      ? Number((current / step ** reversalBoxes).toFixed(4))
-      : Number((current * step ** reversalBoxes).toFixed(4));
+      ? Number((currentExtreme / step ** reversalBoxes).toFixed(4))
+      : Number((currentExtreme * step ** reversalBoxes).toFixed(4));
 
   return {
     columns,
@@ -372,8 +369,6 @@ function createPnf(series: { date: Date; value: number }[], boxPercent: number, 
     lastSignal: lastColumn.signal ?? null,
     direction: lastColumn.type,
     nextReversal,
-    chartHigh,
-    chartLow,
   };
 }
 
@@ -407,19 +402,22 @@ function App() {
   const [rightColumn, setRightColumn] = useState('');
   const [boxPercent, setBoxPercent] = useState(DEFAULT_BOX_PERCENT);
   const [reversalBoxes, setReversalBoxes] = useState(DEFAULT_REVERSAL);
+  const [scaleMode, setScaleMode] = useState<ScaleMode>('nasdaq');
+  const [targetCurrentRs, setTargetCurrentRs] = useState<number>(SAMPLE_TARGET_RS);
   const [error, setError] = useState('');
 
   async function loadParsedFile(fileName: string, buffer: ArrayBuffer) {
     const nextParsed = extractWorkbookRows(buffer, fileName);
     setParsed(nextParsed);
     const detectedDate = detectDateColumn(nextParsed.rows, nextParsed.columns);
-    const numericColumns = detectNumericColumns(nextParsed.rows, nextParsed.columns, detectedDate);
-    const nextLeft = numericColumns[0] || '';
-    const nextRight = numericColumns[1] || numericColumns[0] || '';
+    const numericCols = detectNumericColumns(nextParsed.rows, nextParsed.columns, detectedDate);
     setDateColumn(detectedDate);
-    setLeftColumn(nextLeft);
-    setRightColumn(nextRight);
-
+    setLeftColumn(numericCols[0] || '');
+    setRightColumn(numericCols[1] || numericCols[0] || '');
+    if (fileName === SAMPLE_FILE_NAME) {
+      setTargetCurrentRs(SAMPLE_TARGET_RS);
+      setScaleMode('nasdaq');
+    }
   }
 
   async function handleFileUpload(event: ChangeEvent<HTMLInputElement>) {
@@ -434,21 +432,36 @@ function App() {
     }
   }
 
+  const numericColumns = useMemo(() => {
+    if (!parsed || !dateColumn) return [] as string[];
+    return detectNumericColumns(parsed.rows, parsed.columns, dateColumn);
+  }, [parsed, dateColumn]);
 
-  const effectiveBase = 1;
+  const rawSeries = useMemo(() => {
+    if (!parsed || !dateColumn || !leftColumn || !rightColumn) return [] as { date: Date; rawRatio: number }[];
+    return buildRawSeries(parsed.rows, dateColumn, leftColumn, rightColumn);
+  }, [parsed, dateColumn, leftColumn, rightColumn]);
+
+  const scaleFactor = useMemo(() => {
+    if (!rawSeries.length) return 1;
+    if (scaleMode === 'raw') return 1;
+    const currentRaw = rawSeries[rawSeries.length - 1].rawRatio;
+    if (!Number.isFinite(currentRaw) || currentRaw <= 0 || !Number.isFinite(targetCurrentRs) || targetCurrentRs <= 0) return 1;
+    return targetCurrentRs / currentRaw;
+  }, [rawSeries, scaleMode, targetCurrentRs]);
 
   const rsSeries = useMemo(() => {
-    if (!parsed || !dateColumn || !leftColumn || !rightColumn) return [];
-    return buildRelativeStrengthSeries(parsed.rows, dateColumn, leftColumn, rightColumn, effectiveBase);
-  }, [parsed, dateColumn, leftColumn, rightColumn, effectiveBase]);
+    if (!parsed || !dateColumn || !leftColumn || !rightColumn) return [] as SeriesItem[];
+    return buildRelativeStrengthSeries(parsed.rows, dateColumn, leftColumn, rightColumn, scaleFactor);
+  }, [parsed, dateColumn, leftColumn, rightColumn, scaleFactor]);
 
   const pnf = useMemo(() => createPnf(rsSeries, boxPercent, reversalBoxes), [rsSeries, boxPercent, reversalBoxes]);
-
-  const currentRaw = rsSeries.length ? rsSeries[rsSeries.length - 1].value : null;
-  const previousRaw = rsSeries.length > 1 ? rsSeries[rsSeries.length - 2].value : null;
-  const changeRaw = currentRaw !== null && previousRaw !== null ? currentRaw - previousRaw : null;
-  const pctChange = currentRaw !== null && previousRaw !== null && previousRaw !== 0 ? (changeRaw / previousRaw) * 100 : null;
-  const nextReversalPct = currentRaw !== null && pnf?.nextReversal ? Math.abs((currentRaw - pnf.nextReversal) / currentRaw) * 100 : null;
+  const currentRaw = rawSeries.length ? rawSeries[rawSeries.length - 1].rawRatio : null;
+  const currentRs = rsSeries.length ? rsSeries[rsSeries.length - 1].value : null;
+  const previousRs = rsSeries.length > 1 ? rsSeries[rsSeries.length - 2].value : null;
+  const changeRs = currentRs !== null && previousRs !== null ? currentRs - previousRs : null;
+  const pctChange = currentRs !== null && previousRs !== null && previousRs !== 0 ? (changeRs / previousRs) * 100 : null;
+  const nextReversalPct = currentRs !== null && pnf?.nextReversal ? Math.abs((currentRs - pnf.nextReversal) / currentRs) * 100 : null;
 
   return (
     <div className="app-shell">
@@ -507,9 +520,23 @@ function App() {
               <span>Reversal boxes</span>
               <input type="number" min="1" step="1" value={reversalBoxes} onChange={(e) => setReversalBoxes(Math.max(1, Number(e.target.value) || DEFAULT_REVERSAL))} />
             </label>
+            <label>
+              <span>RS mode</span>
+              <select value={scaleMode} onChange={(e) => setScaleMode(e.target.value as ScaleMode)}>
+                <option value="nasdaq">Nasdaq matched</option>
+                <option value="raw">Raw ratio</option>
+              </select>
+            </label>
+            <label>
+              <span>Target current RS</span>
+              <input type="number" step="0.0001" value={targetCurrentRs} onChange={(e) => setTargetCurrentRs(Number(e.target.value) || SAMPLE_TARGET_RS)} />
+            </label>
+            <label>
+              <span>Auto scale factor</span>
+              <input type="text" value={formatNumber(scaleFactor, 6)} readOnly />
+            </label>
           </div>
         )}
-
 
         {error && <div className="error-box">{error}</div>}
       </section>
@@ -517,12 +544,12 @@ function App() {
       <section className="panel summary-strip">
         <div className="summary-line">
           <span>{leftColumn || 'Asset 1'}</span>
-          <strong>RS Calc: {formatNumber(currentRaw, 4)}</strong>
+          <strong>Raw Ratio: {formatNumber(currentRaw, 6)}</strong>
+          <strong>RS Calc: {formatNumber(currentRs, 4)}</strong>
           <strong>Next Reversal: {formatNumber(nextReversalPct, 2)}%</strong>
-          <span>Previous Close: {formatNumber(previousRaw, 4)}</span>
-          <span className={changeRaw !== null && changeRaw < 0 ? 'down' : 'up'}>{formatNumber(changeRaw, 4)} ({formatNumber(pctChange, 2)}%)</span>
-          <span>H: {currentRaw !== null ? formatNumber(currentRaw, 4) : '—'}</span>
-          <span>L: {currentRaw !== null ? formatNumber(currentRaw, 4) : '—'}</span>
+          <span>Previous Close: {formatNumber(previousRs, 4)}</span>
+          <span className={changeRs !== null && changeRs < 0 ? 'down' : 'up'}>{formatNumber(changeRs, 4)} ({formatNumber(pctChange, 2)}%)</span>
+          <span>Dir: {pnf?.direction || '—'}</span>
         </div>
       </section>
 
@@ -532,7 +559,7 @@ function App() {
 
       <section className="panel note-box">
         <p>
-          The engine now calculates Relative Strength exactly as Asset 1 ÷ Asset 2, then places that ratio on a percentage point-and-figure grid and reverses only after a full {reversalBoxes}-box move from the latest extreme.
+          In <strong>Raw ratio</strong> mode the site uses only Asset 1 ÷ Asset 2. In <strong>Nasdaq matched</strong> mode it keeps the same ratio shape but applies an auto multiplier so the latest RS Calc matches the Nasdaq value you enter. For your sample file, the default target is 568.6761.
         </p>
       </section>
     </div>
@@ -555,11 +582,7 @@ function PnfChart({ pnf }: { pnf: PnfResult }) {
           <div />
           <div className="year-band-inner" style={{ gridColumn: `2 / span ${columns.length}` }}>
             {yearGroups.map((group) => (
-              <div
-                key={`top-${group.year}-${group.start}`}
-                className="year-group"
-                style={{ gridColumn: `${group.start + 1} / span ${group.span}` }}
-              >
+              <div key={`top-${group.year}-${group.start}`} className="year-group" style={{ gridColumn: `${group.start + 1} / span ${group.span}` }}>
                 {String(group.year).slice(-2)}
               </div>
             ))}
@@ -574,10 +597,7 @@ function PnfChart({ pnf }: { pnf: PnfResult }) {
               {columns.map((_, colIndex) => {
                 const cell = cellMap.get(`${rowIndex}-${colIndex}`);
                 return (
-                  <div
-                    key={`${rowIndex}-${colIndex}`}
-                    className={`grid-cell ${cell?.value === 'X' ? 'cell-x' : ''} ${cell?.value === 'O' ? 'cell-o' : ''} ${cell?.signal === 'buy' ? 'signal-buy' : ''} ${cell?.signal === 'sell' ? 'signal-sell' : ''}`}
-                  >
+                  <div key={`${rowIndex}-${colIndex}`} className={`grid-cell ${cell?.value === 'X' ? 'cell-x' : ''} ${cell?.value === 'O' ? 'cell-o' : ''} ${cell?.signal === 'buy' ? 'signal-buy' : ''} ${cell?.signal === 'sell' ? 'signal-sell' : ''}`}>
                     {cell ? <span className={cell.isMarker ? 'marker' : ''}>{cell.value}</span> : null}
                   </div>
                 );
@@ -591,11 +611,7 @@ function PnfChart({ pnf }: { pnf: PnfResult }) {
           <div />
           <div className="year-band-inner" style={{ gridColumn: `2 / span ${columns.length}` }}>
             {yearGroups.map((group) => (
-              <div
-                key={`bottom-${group.year}-${group.start}`}
-                className="year-group"
-                style={{ gridColumn: `${group.start + 1} / span ${group.span}` }}
-              >
+              <div key={`bottom-${group.year}-${group.start}`} className="year-group" style={{ gridColumn: `${group.start + 1} / span ${group.span}` }}>
                 {String(group.year).slice(-2)}
               </div>
             ))}

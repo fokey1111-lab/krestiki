@@ -24,3 +24,5 @@ npm run build
 - Optional Nasdaq reference CSV auto-calibrates the RS base from the latest DW value
 
 Sample files are included in `public/sample` and `public/reference`.
+
+Sample file: public/sample/chart(871).xlsx
