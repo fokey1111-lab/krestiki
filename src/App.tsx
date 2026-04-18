@@ -74,18 +74,27 @@ function detectNumericColumns(rows: Row[], columns: string[], dateColumn: string
 }
 
 function buildRelativeStrengthSeries(rows: Row[], dateCol: string, leftCol: string, rightCol: string, scaleBase: number) {
-  const items = rows
+  const aligned = rows
     .map((row) => {
       const date = toDate(row[dateCol]);
       const left = toNumber(row[leftCol]);
       const right = toNumber(row[rightCol]);
-      if (!date || left === null || right === null || right === 0) return null;
-      return { date, value: (left / right) * scaleBase };
+      if (!date || left === null || right === null || left <= 0 || right <= 0) return null;
+      return { date, left, right };
     })
-    .filter(Boolean) as { date: Date; value: number }[];
+    .filter(Boolean) as { date: Date; left: number; right: number }[];
 
-  items.sort((a, b) => a.date.getTime() - b.date.getTime());
-  return items;
+  aligned.sort((a, b) => a.date.getTime() - b.date.getTime());
+  if (!aligned.length) return [];
+
+  const baseLeft = aligned[0].left;
+  const baseRight = aligned[0].right;
+  if (baseLeft <= 0 || baseRight <= 0) return [];
+
+  return aligned.map((item) => ({
+    date: item.date,
+    value: ((item.left / baseLeft) / (item.right / baseRight)) * scaleBase,
+  }));
 }
 
 function uniqueSortedDescending(values: number[]) {
@@ -417,7 +426,7 @@ function App() {
 
       <section className="panel notes">
         <h3>How it works</h3>
-        <p>The app reads two numeric columns from Excel, calculates relative strength as Asset 1 ÷ Asset 2 × Scale Base, then builds a point & figure chart using your box size and reversal settings.</p>
+        <p>The app reads two numeric columns from Excel, normalizes both series from the first valid date, then calculates relative strength as ((Asset 1 ÷ first Asset 1) ÷ (Asset 2 ÷ first Asset 2)) × Scale Base.</p>
         <p>Green cells mark buy signals when an X-column breaks above the prior X-column high. Red cells mark sell signals when an O-column breaks below the prior O-column low. Years are shown under the column axis.</p>
       </section>
     </div>
