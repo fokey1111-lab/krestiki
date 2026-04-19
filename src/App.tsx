@@ -1,4 +1,4 @@
-import { ChangeEvent, Fragment, useMemo, useState } from 'react';
+import { ChangeEvent, Fragment, useEffect, useMemo, useState } from 'react';
 import * as XLSX from 'xlsx';
 
 type Row = Record<string, unknown>;
@@ -115,13 +115,7 @@ function buildRawSeries(rows: Row[], dateCol: string, leftCol: string, rightCol:
     .sort((a, b) => a!.date.getTime() - b!.date.getTime()) as { date: Date; rawRatio: number }[];
 }
 
-function buildRelativeStrengthSeries(
-  rows: Row[],
-  dateCol: string,
-  leftCol: string,
-  rightCol: string,
-  scaleFactor: number,
-) {
+function buildRelativeStrengthSeries(rows: Row[], dateCol: string, leftCol: string, rightCol: string, scaleFactor: number) {
   return buildRawSeries(rows, dateCol, leftCol, rightCol).map((item) => ({
     date: item.date,
     rawRatio: item.rawRatio,
@@ -169,7 +163,7 @@ function levelKey(level: number) {
   return Number(level.toFixed(4));
 }
 
-function buildLevels(minLevel: number, maxLevel: number, step: number, padding = 4) {
+function buildLevels(minLevel: number, maxLevel: number, step: number, padding = 3) {
   let low = minLevel;
   let high = maxLevel;
   for (let i = 0; i < padding; i += 1) {
@@ -402,6 +396,11 @@ function extractWorkbookRows(buffer: ArrayBuffer, fileName: string): ParsedFile 
   return parseRows(fileName, rows);
 }
 
+function compactDate(date: Date | null) {
+  if (!date) return '—';
+  return date.toLocaleDateString('en-GB');
+}
+
 function compactDateTime(date: Date | null) {
   if (!date) return '';
   const datePart = date.toLocaleDateString('en-GB');
@@ -434,6 +433,21 @@ function App() {
       setScaleMode('nasdaq');
     }
   }
+
+  useEffect(() => {
+    const controller = new AbortController();
+    (async () => {
+      try {
+        const response = await fetch(`/sample/${encodeURIComponent(SAMPLE_FILE_NAME)}`, { signal: controller.signal });
+        if (!response.ok) return;
+        const buffer = await response.arrayBuffer();
+        await loadParsedFile(SAMPLE_FILE_NAME, buffer);
+      } catch {
+        // keep empty state if sample could not load
+      }
+    })();
+    return () => controller.abort();
+  }, []);
 
   async function handleFileUpload(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -481,66 +495,92 @@ function App() {
 
   return (
     <div className="app-shell">
-      <div className="toolbar-strip">
-        <label className="upload-button">
-          <span>Upload Excel / CSV</span>
-          <input type="file" accept=".xlsx,.xls,.csv" onChange={handleFileUpload} />
-        </label>
-        <button className="ghost-button" type="button" onClick={() => setShowSettings((v) => !v)}>
-          {showSettings ? 'Hide settings' : 'Show settings'}
-        </button>
-        <div className="toolbar-note">{parsed ? parsed.fileName : 'No data file loaded'}</div>
-      </div>
+      <div className="page-title">Point &amp; Figure Relative Strength</div>
+
+      <section className="settings-ribbon">
+        <div className="control-grid compact-controls">
+          <label>
+            <span>Date</span>
+            <select value={dateColumn} onChange={(e) => setDateColumn(e.target.value)}>
+              {parsed?.columns.map((column) => (
+                <option key={column} value={column}>{column}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Asset 1</span>
+            <select value={leftColumn} onChange={(e) => setLeftColumn(e.target.value)}>
+              {numericColumns.map((column) => (
+                <option key={column} value={column}>{column}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Asset 2</span>
+            <select value={rightColumn} onChange={(e) => setRightColumn(e.target.value)}>
+              {numericColumns.map((column) => (
+                <option key={column} value={column}>{column}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Box %</span>
+            <input type="number" step="0.001" value={boxPercent} onChange={(e) => setBoxPercent(Number(e.target.value) || DEFAULT_BOX_PERCENT)} />
+          </label>
+          <label>
+            <span>Reversal</span>
+            <input type="number" min="1" step="1" value={reversalBoxes} onChange={(e) => setReversalBoxes(Math.max(1, Number(e.target.value) || DEFAULT_REVERSAL))} />
+          </label>
+          <label>
+            <span>RS Mode</span>
+            <select value={scaleMode} onChange={(e) => setScaleMode(e.target.value as ScaleMode)}>
+              <option value="nasdaq">Nasdaq matched</option>
+              <option value="raw">Raw ratio</option>
+            </select>
+          </label>
+          <label>
+            <span>Target RS</span>
+            <input type="number" step="0.0001" value={targetCurrentRs} onChange={(e) => setTargetCurrentRs(Number(e.target.value) || SAMPLE_TARGET_RS)} />
+          </label>
+          <label className="upload-inline">
+            <span>Data file</span>
+            <div className="upload-inline-row">
+              <label className="upload-button small-upload">
+                <span>Upload</span>
+                <input type="file" accept=".xlsx,.xls,.csv" onChange={handleFileUpload} />
+              </label>
+              <button className="ghost-button" type="button" onClick={() => setShowSettings((v) => !v)}>
+                {showSettings ? 'Less' : 'More'}
+              </button>
+            </div>
+          </label>
+        </div>
+        <div className="settings-subline">
+          <span>RS = (Asset 1 / Asset 2) × scale</span>
+          <span>Loaded: {parsed?.fileName || '—'}</span>
+          <span>Current date: {compactDate(lastDate)}</span>
+          <span>Scale factor: {formatNumber(scaleFactor, 6)}</span>
+        </div>
+      </section>
 
       {showSettings && parsed ? (
         <section className="settings-panel">
           <div className="control-grid">
             <label>
-              <span>Date column</span>
-              <select value={dateColumn} onChange={(e) => setDateColumn(e.target.value)}>
-                {parsed.columns.map((column) => (
-                  <option key={column} value={column}>{column}</option>
-                ))}
-              </select>
-            </label>
-            <label>
-              <span>Asset 1</span>
-              <select value={leftColumn} onChange={(e) => setLeftColumn(e.target.value)}>
-                {numericColumns.map((column) => (
-                  <option key={column} value={column}>{column}</option>
-                ))}
-              </select>
-            </label>
-            <label>
-              <span>Asset 2</span>
-              <select value={rightColumn} onChange={(e) => setRightColumn(e.target.value)}>
-                {numericColumns.map((column) => (
-                  <option key={column} value={column}>{column}</option>
-                ))}
-              </select>
-            </label>
-            <label>
-              <span>Box size (%)</span>
-              <input type="number" step="0.001" value={boxPercent} onChange={(e) => setBoxPercent(Number(e.target.value) || DEFAULT_BOX_PERCENT)} />
-            </label>
-            <label>
-              <span>Reversal boxes</span>
-              <input type="number" min="1" step="1" value={reversalBoxes} onChange={(e) => setReversalBoxes(Math.max(1, Number(e.target.value) || DEFAULT_REVERSAL))} />
-            </label>
-            <label>
-              <span>RS mode</span>
-              <select value={scaleMode} onChange={(e) => setScaleMode(e.target.value as ScaleMode)}>
-                <option value="nasdaq">Nasdaq matched</option>
-                <option value="raw">Raw ratio</option>
-              </select>
-            </label>
-            <label>
-              <span>Target current RS</span>
-              <input type="number" step="0.0001" value={targetCurrentRs} onChange={(e) => setTargetCurrentRs(Number(e.target.value) || SAMPLE_TARGET_RS)} />
-            </label>
-            <label>
               <span>Auto scale factor</span>
               <input type="text" value={formatNumber(scaleFactor, 6)} readOnly />
+            </label>
+            <label>
+              <span>Raw ratio</span>
+              <input type="text" value={formatNumber(currentRaw, 6)} readOnly />
+            </label>
+            <label>
+              <span>RS Calc</span>
+              <input type="text" value={formatNumber(currentRs, 4)} readOnly />
+            </label>
+            <label>
+              <span>Next reversal %</span>
+              <input type="text" value={formatNumber(nextReversalPct, 2)} readOnly />
             </label>
           </div>
         </section>
@@ -554,7 +594,7 @@ function App() {
           <span className="crumb-sep">›</span>
           <span>Stocks</span>
           <span className="crumb-sep">›</span>
-          <strong>{leftColumn || 'AVCBLUENEW2024'} {leftColumn ? `(${leftColumn})` : ''}</strong>
+          <strong>{leftColumn || 'AVCBLUENEW2024'} {leftColumn ? `(${leftColumn.replace(/^!/, '')})` : ''}</strong>
           <span className="chevron">▾</span>
         </div>
       </header>
@@ -572,25 +612,26 @@ function App() {
       <section className="dw-chart-shell">
         <div className="dw-chart-topline">
           <div className="topline-left">
-            <strong>!{leftColumn || 'AVCBLUE1'}</strong>
+            <strong>{leftColumn || '!AVCBLUE1'}</strong>
             <span>vs</span>
-            <strong>!{rightColumn || 'ALLSEZONPORTFOLIORS'}</strong>
-            <span>Scale:</span>
-            <strong>{boxPercent.toFixed(3)}%</strong>
+            <strong>{rightColumn || '!ALLSEZONPORTFOLIORS'}</strong>
+            <span>RS</span>
+            <span>{boxPercent.toFixed(3)}</span>
+            <span>{reversalBoxes}</span>
+            <span>Inception - Present</span>
             <span>{compactDateTime(lastDate)}</span>
           </div>
           <div className="topline-right">Image Source: NASDAQ DORSEY WRIGHT</div>
         </div>
         {pnf ? <PnfChart pnf={pnf} /> : <div className="empty-state">Upload a file with dates and two price columns.</div>}
       </section>
-      <div className="foot-note">Raw ratio: {formatNumber(currentRaw, 6)} · Direction: {pnf?.direction || '—'} · Mode: {scaleMode === 'nasdaq' ? 'Nasdaq matched' : 'Raw ratio'}</div>
     </div>
   );
 }
 
 function PnfChart({ pnf }: { pnf: PnfResult }) {
   const { columns, levels, cells } = pnf;
-  const cellSize = 14;
+  const cellSize = 12;
   const leftAxis = 78;
   const rightAxis = 78;
   const yearGroups = buildYearGroups(columns);
@@ -599,8 +640,8 @@ function PnfChart({ pnf }: { pnf: PnfResult }) {
 
   return (
     <div className="chart-wrap">
-      <div className="chart-grid" style={{ minWidth: Math.max(chartWidth, 1050) }}>
-        <div className="year-band" style={{ gridTemplateColumns: `${leftAxis}px repeat(${columns.length}, ${cellSize}px) ${rightAxis}px` }}>
+      <div className="chart-grid" style={{ minWidth: Math.max(chartWidth, 1320) }}>
+        <div className="year-band top" style={{ gridTemplateColumns: `${leftAxis}px repeat(${columns.length}, ${cellSize}px) ${rightAxis}px` }}>
           <div />
           <div className="year-band-inner" style={{ gridColumn: `2 / span ${columns.length}` }}>
             {yearGroups.map((group) => (
