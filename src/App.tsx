@@ -53,8 +53,15 @@ function toDate(value: unknown): Date | null {
     return Number.isNaN(date.getTime()) ? null : date;
   }
   if (typeof value === 'string') {
-    const normalized = value.replace(/\./g, '-').replace(/\//g, '-');
-    const date = new Date(normalized);
+    const trimmed = value.trim();
+    const normalized = trimmed.replace(/\//g, '.');
+    const m = normalized.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+    if (m) {
+      const [, dd, mm, yyyy] = m;
+      const date = new Date(Number(yyyy), Number(mm) - 1, Number(dd));
+      return Number.isNaN(date.getTime()) ? null : date;
+    }
+    const date = new Date(trimmed);
     return Number.isNaN(date.getTime()) ? null : date;
   }
   return null;
@@ -347,7 +354,7 @@ function createPnf(series: SeriesItem[], boxPercent: number, reversalBoxes: numb
     column.markers.forEach((marker) => {
       const row = rowMap.get(levelKey(marker.level));
       if (row === undefined) return;
-      cells.push({ row, col: colIndex, value: marker.label, isMarker: true });
+      cells.push({ row, col: colIndex, value: marker.label, isMarker: true, signal: undefined });
     });
   });
 
@@ -395,6 +402,13 @@ function extractWorkbookRows(buffer: ArrayBuffer, fileName: string): ParsedFile 
   return parseRows(fileName, rows);
 }
 
+function compactDateTime(date: Date | null) {
+  if (!date) return '';
+  const datePart = date.toLocaleDateString('en-GB');
+  const timePart = date.toLocaleTimeString('en-GB', { hour12: false, hour: '2-digit', minute: '2-digit' });
+  return `${datePart} ${timePart} GMT+3`;
+}
+
 function App() {
   const [parsed, setParsed] = useState<ParsedFile | null>(null);
   const [dateColumn, setDateColumn] = useState('');
@@ -405,6 +419,7 @@ function App() {
   const [scaleMode, setScaleMode] = useState<ScaleMode>('nasdaq');
   const [targetCurrentRs, setTargetCurrentRs] = useState<number>(SAMPLE_TARGET_RS);
   const [error, setError] = useState('');
+  const [showSettings, setShowSettings] = useState(false);
 
   async function loadParsedFile(fileName: string, buffer: ArrayBuffer) {
     const nextParsed = extractWorkbookRows(buffer, fileName);
@@ -462,31 +477,23 @@ function App() {
   const changeRs = currentRs !== null && previousRs !== null ? currentRs - previousRs : null;
   const pctChange = currentRs !== null && previousRs !== null && previousRs !== 0 ? (changeRs / previousRs) * 100 : null;
   const nextReversalPct = currentRs !== null && pnf?.nextReversal ? Math.abs((currentRs - pnf.nextReversal) / currentRs) * 100 : null;
+  const lastDate = rsSeries.length ? rsSeries[rsSeries.length - 1].date : null;
 
   return (
     <div className="app-shell">
-      <header className="topline panel slim">
-        <div className="headline-left">
-          <strong>{leftColumn || 'Asset 1'}</strong>
-          <span>vs</span>
-          <strong>{rightColumn || 'Asset 2'}</strong>
-          <span>Scale:</span>
-          <strong>{boxPercent.toFixed(3)}%</strong>
-          <span>{rsSeries.length ? rsSeries[rsSeries.length - 1].date.toLocaleString('en-GB', { hour12: false }) : ''}</span>
-        </div>
-        <div className="headline-right">Image Source: NASDAQ DORSEY WRIGHT</div>
-      </header>
+      <div className="toolbar-strip">
+        <label className="upload-button">
+          <span>Upload Excel / CSV</span>
+          <input type="file" accept=".xlsx,.xls,.csv" onChange={handleFileUpload} />
+        </label>
+        <button className="ghost-button" type="button" onClick={() => setShowSettings((v) => !v)}>
+          {showSettings ? 'Hide settings' : 'Show settings'}
+        </button>
+        <div className="toolbar-note">{parsed ? parsed.fileName : 'No data file loaded'}</div>
+      </div>
 
-      <section className="panel controls">
-        <div className="upload-row">
-          <label className="upload-box">
-            <span>Upload Excel / CSV with two assets</span>
-            <input type="file" accept=".xlsx,.xls,.csv" onChange={handleFileUpload} />
-          </label>
-          <div className="loaded-name">{parsed ? `Loaded: ${parsed.fileName}` : 'No data file loaded'}</div>
-        </div>
-
-        {parsed && (
+      {showSettings && parsed ? (
+        <section className="settings-panel">
           <div className="control-grid">
             <label>
               <span>Date column</span>
@@ -536,43 +543,63 @@ function App() {
               <input type="text" value={formatNumber(scaleFactor, 6)} readOnly />
             </label>
           </div>
-        )}
+        </section>
+      ) : null}
 
-        {error && <div className="error-box">{error}</div>}
-      </section>
+      {error ? <div className="error-box">{error}</div> : null}
 
-      <section className="panel summary-strip">
-        <div className="summary-line">
-          <span>{leftColumn || 'Asset 1'}</span>
-          <strong>Raw Ratio: {formatNumber(currentRaw, 6)}</strong>
-          <strong>RS Calc: {formatNumber(currentRs, 4)}</strong>
-          <strong>Next Reversal: {formatNumber(nextReversalPct, 2)}%</strong>
-          <span>Previous Close: {formatNumber(previousRs, 4)}</span>
-          <span className={changeRs !== null && changeRs < 0 ? 'down' : 'up'}>{formatNumber(changeRs, 4)} ({formatNumber(pctChange, 2)}%)</span>
-          <span>Dir: {pnf?.direction || '—'}</span>
+      <header className="dw-breadcrumbs">
+        <div className="crumbs-left">
+          <span>Securities</span>
+          <span className="crumb-sep">›</span>
+          <span>Stocks</span>
+          <span className="crumb-sep">›</span>
+          <strong>{leftColumn || 'AVCBLUENEW2024'} {leftColumn ? `(${leftColumn})` : ''}</strong>
+          <span className="chevron">▾</span>
         </div>
+      </header>
+
+      <section className="dw-summary-bar">
+        <span className="summary-name">{leftColumn || 'AVCBLUENEW2024'}</span>
+        <span><strong>RS Calc:</strong> {formatNumber(currentRs, 4)}</span>
+        <span><strong>Next Reversal:</strong> {formatNumber(nextReversalPct, 2)}%</span>
+        <span><strong>Previous Close:</strong> {formatNumber(previousRs, 4)}</span>
+        <span className={changeRs !== null && changeRs < 0 ? 'neg' : 'pos'}>{formatNumber(changeRs, 4)} ({formatNumber(pctChange, 2)}%)</span>
+        <span><strong>H:</strong> {formatNumber(currentRs, 4)}</span>
+        <span><strong>L:</strong> {formatNumber(previousRs ?? currentRs, 4)}</span>
       </section>
 
-      <section className="panel chart-panel">
-        {pnf ? <PnfChart pnf={pnf} /> : <div className="empty-state">Not enough movement to build a chart yet.</div>}
+      <section className="dw-chart-shell">
+        <div className="dw-chart-topline">
+          <div className="topline-left">
+            <strong>!{leftColumn || 'AVCBLUE1'}</strong>
+            <span>vs</span>
+            <strong>!{rightColumn || 'ALLSEZONPORTFOLIORS'}</strong>
+            <span>Scale:</span>
+            <strong>{boxPercent.toFixed(3)}%</strong>
+            <span>{compactDateTime(lastDate)}</span>
+          </div>
+          <div className="topline-right">Image Source: NASDAQ DORSEY WRIGHT</div>
+        </div>
+        {pnf ? <PnfChart pnf={pnf} /> : <div className="empty-state">Upload a file with dates and two price columns.</div>}
       </section>
-
+      <div className="foot-note">Raw ratio: {formatNumber(currentRaw, 6)} · Direction: {pnf?.direction || '—'} · Mode: {scaleMode === 'nasdaq' ? 'Nasdaq matched' : 'Raw ratio'}</div>
     </div>
   );
 }
 
 function PnfChart({ pnf }: { pnf: PnfResult }) {
   const { columns, levels, cells } = pnf;
-  const cellSize = 16;
-  const leftAxis = 72;
-  const rightAxis = 72;
+  const cellSize = 14;
+  const leftAxis = 78;
+  const rightAxis = 78;
   const yearGroups = buildYearGroups(columns);
   const cellMap = new Map(cells.map((cell) => [`${cell.row}-${cell.col}`, cell]));
   const chartWidth = leftAxis + rightAxis + columns.length * cellSize;
 
   return (
     <div className="chart-wrap">
-      <div className="chart-grid" style={{ minWidth: Math.max(chartWidth, 1220) }}>
+      <div className="chart-grid" style={{ minWidth: Math.max(chartWidth, 1050) }}>
         <div className="year-band" style={{ gridTemplateColumns: `${leftAxis}px repeat(${columns.length}, ${cellSize}px) ${rightAxis}px` }}>
           <div />
           <div className="year-band-inner" style={{ gridColumn: `2 / span ${columns.length}` }}>
@@ -592,7 +619,10 @@ function PnfChart({ pnf }: { pnf: PnfResult }) {
               {columns.map((_, colIndex) => {
                 const cell = cellMap.get(`${rowIndex}-${colIndex}`);
                 return (
-                  <div key={`${rowIndex}-${colIndex}`} className={`grid-cell ${cell?.value === 'X' ? 'cell-x' : ''} ${cell?.value === 'O' ? 'cell-o' : ''} ${cell?.signal === 'buy' ? 'signal-buy' : ''} ${cell?.signal === 'sell' ? 'signal-sell' : ''}`}>
+                  <div
+                    key={`${rowIndex}-${colIndex}`}
+                    className={`grid-cell ${cell?.value === 'X' ? 'cell-x' : ''} ${cell?.value === 'O' ? 'cell-o' : ''} ${cell?.signal === 'buy' ? 'signal-buy' : ''} ${cell?.signal === 'sell' ? 'signal-sell' : ''}`}
+                  >
                     {cell ? <span className={cell.isMarker ? 'marker' : ''}>{cell.value}</span> : null}
                   </div>
                 );
