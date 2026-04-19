@@ -102,12 +102,13 @@ function parseDelimitedText(text: string): Row[] {
   return XLSX.utils.sheet_to_json<Row>(sheet, { defval: null, raw: true });
 }
 
-function buildRawSeries(rows: Row[], dateCol: string, leftCol: string, rightCol: string) {
+function buildRawSeries(rows: Row[], dateCol: string, leftCol: string, rightCol?: string) {
+  const singleAssetMode = !rightCol || rightCol === '__NONE__' || rightCol === leftCol;
   return rows
     .map((row) => {
       const date = toDate(row[dateCol]);
       const left = toNumber(row[leftCol]);
-      const right = toNumber(row[rightCol]);
+      const right = singleAssetMode ? 1 : toNumber(row[rightCol]);
       if (!date || left === null || right === null || left <= 0 || right <= 0) return null;
       return { date, rawRatio: left / right };
     })
@@ -412,7 +413,7 @@ function App() {
   const [parsed, setParsed] = useState<ParsedFile | null>(null);
   const [dateColumn, setDateColumn] = useState('');
   const [leftColumn, setLeftColumn] = useState('');
-  const [rightColumn, setRightColumn] = useState('');
+  const [rightColumn, setRightColumn] = useState('__NONE__');
   const [boxPercent, setBoxPercent] = useState(DEFAULT_BOX_PERCENT);
   const [reversalBoxes, setReversalBoxes] = useState(DEFAULT_REVERSAL);
   const [scaleMode, setScaleMode] = useState<ScaleMode>('nasdaq');
@@ -427,7 +428,7 @@ function App() {
     const numericCols = detectNumericColumns(nextParsed.rows, nextParsed.columns, detectedDate);
     setDateColumn(detectedDate);
     setLeftColumn(numericCols[0] || '');
-    setRightColumn(numericCols[1] || numericCols[0] || '');
+    setRightColumn(numericCols[1] || '__NONE__');
     if (fileName === SAMPLE_FILE_NAME) {
       setTargetCurrentRs(SAMPLE_TARGET_RS);
       setScaleMode('nasdaq');
@@ -467,7 +468,7 @@ function App() {
   }, [parsed, dateColumn]);
 
   const rawSeries = useMemo(() => {
-    if (!parsed || !dateColumn || !leftColumn || !rightColumn) return [] as { date: Date; rawRatio: number }[];
+    if (!parsed || !dateColumn || !leftColumn) return [] as { date: Date; rawRatio: number }[];
     return buildRawSeries(parsed.rows, dateColumn, leftColumn, rightColumn);
   }, [parsed, dateColumn, leftColumn, rightColumn]);
 
@@ -480,12 +481,13 @@ function App() {
   }, [rawSeries, scaleMode, targetCurrentRs]);
 
   const rsSeries = useMemo(() => {
-    if (!parsed || !dateColumn || !leftColumn || !rightColumn) return [] as SeriesItem[];
+    if (!parsed || !dateColumn || !leftColumn) return [] as SeriesItem[];
     return buildRelativeStrengthSeries(parsed.rows, dateColumn, leftColumn, rightColumn, scaleFactor);
   }, [parsed, dateColumn, leftColumn, rightColumn, scaleFactor]);
 
   const pnf = useMemo(() => createPnf(rsSeries, boxPercent, reversalBoxes), [rsSeries, boxPercent, reversalBoxes]);
   const currentRaw = rawSeries.length ? rawSeries[rawSeries.length - 1].rawRatio : null;
+  const singleAssetMode = !rightColumn || rightColumn === '__NONE__' || rightColumn === leftColumn;
   const currentRs = rsSeries.length ? rsSeries[rsSeries.length - 1].value : null;
   const previousRs = rsSeries.length > 1 ? rsSeries[rsSeries.length - 2].value : null;
   const changeRs = currentRs !== null && previousRs !== null ? currentRs - previousRs : null;
@@ -518,6 +520,7 @@ function App() {
           <label>
             <span>Asset 2</span>
             <select value={rightColumn} onChange={(e) => setRightColumn(e.target.value)}>
+              <option value="__NONE__">(None / Single asset)</option>
               {numericColumns.map((column) => (
                 <option key={column} value={column}>{column}</option>
               ))}
@@ -556,7 +559,7 @@ function App() {
           </label>
         </div>
         <div className="settings-subline">
-          <span>RS = (Asset 1 / Asset 2) × scale</span>
+          <span>{singleAssetMode ? 'Single asset mode: Asset 1 × scale' : 'RS = (Asset 1 / Asset 2) × scale'}</span>
           <span>Loaded: {parsed?.fileName || '—'}</span>
           <span>Current date: {compactDate(lastDate)}</span>
           <span>Scale factor: {formatNumber(scaleFactor, 6)}</span>
@@ -600,7 +603,7 @@ function App() {
       </header>
 
       <section className="dw-summary-bar">
-        <span className="summary-name">{leftColumn || 'AVCBLUENEW2024'}</span>
+        <span className="summary-name">{leftColumn || 'AVCBLUENEW2024'}{singleAssetMode ? ' · Single asset' : ''}</span>
         <span><strong>RS Calc:</strong> {formatNumber(currentRs, 4)}</span>
         <span><strong>Next Reversal:</strong> {formatNumber(nextReversalPct, 2)}%</span>
         <span><strong>Previous Close:</strong> {formatNumber(previousRs, 4)}</span>
@@ -614,7 +617,7 @@ function App() {
           <div className="topline-left">
             <strong>{leftColumn || '!AVCBLUE1'}</strong>
             <span>vs</span>
-            <strong>{rightColumn || '!ALLSEZONPORTFOLIORS'}</strong>
+            <strong>{singleAssetMode ? 'SINGLE ASSET' : (rightColumn || '!ALLSEZONPORTFOLIORS')}</strong>
             <span>RS</span>
             <span>{boxPercent.toFixed(3)}</span>
             <span>{reversalBoxes}</span>
